@@ -1,0 +1,3 @@
+#include "build-info.hpp"
+
+const std::filesystem::path& SOURCE_ROOT = "@CMAKE_SOURCE_DIR@";
