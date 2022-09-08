@@ -17,6 +17,8 @@ template <class T> struct XYModel {
 };
 using XYVector = ve::Vector<XYModel, float>;
 
+// NOTE: just individual structs before ECS introduction
+
 struct Hero {
     static constexpr float accelerationTime = 0.2f;
     static constexpr float decelerationTime = 0.2f;
@@ -24,6 +26,12 @@ struct Hero {
 
     XYVector position;
     XYVector velocity;
+    float radius = 50.f;
+};
+
+struct Tree {
+    XYVector position;
+    float radius = 50.f;
 };
 
 struct KeyboardControllerState {
@@ -106,10 +114,15 @@ int main()
 
     SDL_Texture* heroTexture = IMG_LoadTexture(
         renderer, (SOURCE_ROOT / "assets" / "hero.png").c_str());
+    SDL_Texture* treeTexture = IMG_LoadTexture(
+        renderer, (SOURCE_ROOT / "assets"/ "tree.png").c_str());
 
     auto hero = Hero{};
     auto controller = KeyboardControllerState{};
     auto heroSprite = HeroSprite{};
+
+    auto tree1 = Tree{.position = {600.f, -100.f}};
+    auto tree2 = Tree{.position = {200.f, -300.f}};
 
     auto timer = tempo::FrameTimer{60};
     auto animationMetronome = tempo::Metronome{3};
@@ -156,13 +169,20 @@ int main()
                 }
 
                 hero.position += hero.velocity * timer.delta();
+
+                for (const auto& tree : {tree1, tree2}) {
+                    auto oof = hero.radius + tree.radius - length(hero.position - tree.position);
+                    if (oof > 0) {
+                        hero.position += oof * unit(hero.position - tree.position);
+                    }
+                }
             }
 
             // update and present graphics
             {
                 // hack before events are introduced
-                heroSprite.position.x = hero.position.x;
-                heroSprite.position.y = -hero.position.y;  // temporary inverse
+                heroSprite.position.x = hero.position.x - 8 * heroSprite.scale;
+                heroSprite.position.y = -hero.position.y + 8 * heroSprite.scale;
 
                 auto heroSpeed = length(hero.velocity);
                 if (heroSpeed > 0) {
@@ -193,16 +213,32 @@ int main()
                 sdlCheck(SDL_SetRenderDrawColor(renderer, 50, 50, 50, 255));
                 sdlCheck(SDL_RenderClear(renderer));
 
+                for (const auto& tree : {tree1, tree2}) {
+                    float scale = 10.f;
+                    auto position = SDL_FRect {
+                        .x = tree.position.x - 4 * scale,
+                        .y = -tree.position.y + 8 * scale,
+                        .w = 8 * scale,
+                        .h = 16 * scale};
+                    sdlCheck(SDL_RenderCopyF(
+                        renderer,
+                        treeTexture,
+                        nullptr,
+                        &position));
+                }
+
                 sdlCheck(SDL_RenderCopyF(
                     renderer,
                     heroTexture,
                     &currentFrame,
                     &heroSprite.position));
+
                 SDL_RenderPresent(renderer);
             }
         }
     }
 
+    SDL_DestroyTexture(treeTexture);
     SDL_DestroyTexture(heroTexture);
 
     SDL_DestroyRenderer(renderer);
