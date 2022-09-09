@@ -5,7 +5,10 @@ add_executable(buzz
 )
 target_link_libraries(buzz PRIVATE
     build-info
+
+    evening
     tempo
+    thing
     ve
 
     SDL2::SDL2
