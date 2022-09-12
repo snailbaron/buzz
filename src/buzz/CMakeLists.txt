@@ -1,6 +1,8 @@
 add_executable(buzz
+    config.cpp
     error.cpp
     main.cpp
+    scene.cpp
     sdl.cpp
 )
 target_link_libraries(buzz PRIVATE

@@ -1,5 +1,7 @@
 #include "error.hpp"
+#include "scene.hpp"
 #include "sdl.hpp"
+#include "world.hpp"
 
 #include "build-info.hpp"
 #include "tempo.hpp"
@@ -12,26 +14,6 @@
 #include <tuple>
 #include <vector>
 
-template <class T> struct XYModel {
-    T x;
-    T y;
-};
-using XYVector = ve::Vector<XYModel, float>;
-
-struct WorldLocation {
-    XYVector position;
-    float radius = 0.f;
-};
-
-struct WorldMovement {
-    XYVector velocity;
-    float maxSpeed = 0.f;
-    float accelerationTime = 0.f;
-    float decelerationTime = 0.f;
-};
-
-struct Control {};
-
 struct KeyboardControllerState {
     bool leftPressed = false;
     bool rightPressed = false;
@@ -42,52 +24,6 @@ struct KeyboardControllerState {
     {
         return {1.f * rightPressed - leftPressed, 1.f * upPressed - downPressed};
     }
-};
-
-enum class MoveDirection {
-    Down,
-    Up,
-    Left,
-    Right,
-};
-
-enum class MoveSpeed {
-    Stand,
-    Walk,
-};
-
-struct DirectionalSprite {
-    DirectionalSprite(SDL_Texture* texture)
-        : texture(texture)
-    {
-        for (auto moveSpeed : {MoveSpeed::Walk, MoveSpeed::Stand}) {
-            for (auto moveDirection : {
-                    MoveDirection::Right,
-                    MoveDirection::Left,
-                    MoveDirection::Down,
-                    MoveDirection::Up}) {
-                int i = frames.size();
-                frames.emplace(
-                    std::tuple<MoveDirection, MoveSpeed>{moveDirection, moveSpeed},
-                    std::vector<SDL_Rect>
-                    {
-                        SDL_Rect{.x = 0, .y = 16 * i, .w = 16, .h = 16},
-                        SDL_Rect{.x = 16, .y = 16 * i, .w = 16, .h = 16},
-                    });
-            }
-        }
-    }
-
-    const size_t frameNumber = 2;
-    static constexpr int scale = 10;
-    static constexpr float minWalkSpeed = 50.f;
-
-    SDL_Texture* texture = nullptr;
-    std::map<std::tuple<MoveDirection, MoveSpeed>, std::vector<SDL_Rect>> frames;
-
-    MoveDirection direction = MoveDirection::Down;
-    size_t frame = 0;
-    SDL_FRect position {.x = 0, .y = 0, .w = 16 * scale, .h = 16 * scale};
 };
 
 int main()
@@ -125,23 +61,14 @@ int main()
         });
     }
 
+    auto view = View{};
+    view.addHero(hero);
+    view.addTree(tree1);
+    view.addTree(tree2);
+
     auto controller = KeyboardControllerState{};
 
-    const auto sdlFlags = SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS;
-    sdlCheck(SDL_InitSubSystem(sdlFlags));
-    check(IMG_Init(IMG_INIT_PNG) == IMG_INIT_PNG);
-
-    SDL_Window* window = sdlCheck(SDL_CreateWindow(
-        "buzz", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, 1920, 1080, 0));
-    SDL_Renderer* renderer = sdlCheck(SDL_CreateRenderer(
-        window, 0, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC));
-
-    SDL_Texture* heroTexture = IMG_LoadTexture(
-        renderer, (SOURCE_ROOT / "assets" / "hero.png").c_str());
-    SDL_Texture* treeTexture = IMG_LoadTexture(
-        renderer, (SOURCE_ROOT / "assets"/ "tree.png").c_str());
-
-    auto heroSprite = DirectionalSprite{heroTexture};
+    auto camera = Camera{};
 
     auto timer = tempo::FrameTimer{60};
     auto animationMetronome = tempo::Metronome{3};
@@ -175,6 +102,7 @@ int main()
         if (int framesPassed = timer(); framesPassed > 0) {
             // update world
             const double delta = timer.delta();
+
             for (int i = 0; i < framesPassed; i++) {
                 auto acceleration = [] (const WorldMovement& m) {
                     return m.maxSpeed / m.accelerationTime;
@@ -229,74 +157,8 @@ int main()
                 }
             }
 
-            // update and present graphics
-            {
-                const auto& heroPosition = ecs.component<WorldLocation>(hero).position;
-                heroSprite.position.x = heroPosition.x - 80;
-                heroSprite.position.y = -heroPosition.y + 80;
-
-                const auto& heroVelocity = ecs.component<WorldMovement>(hero).velocity;
-                auto heroSpeed = length(heroVelocity);
-                if (heroSpeed > 0) {
-                    if (1.5 * std::abs(heroVelocity.x) > std::abs(heroVelocity.y)) {
-                        if (heroVelocity.x > 0) {
-                            heroSprite.direction = MoveDirection::Right;
-                        } else {
-                            heroSprite.direction = MoveDirection::Left;
-                        }
-                    } else {
-                        if (heroVelocity.y > 0) {
-                            heroSprite.direction = MoveDirection::Up;
-                        } else {
-                            heroSprite.direction = MoveDirection::Down;
-                        }
-                    }
-                }
-
-                auto moveSpeed = heroSpeed < heroSprite.minWalkSpeed ?
-                    MoveSpeed::Stand : MoveSpeed::Walk;
-
-                auto frames = heroSprite.frames.at({heroSprite.direction, moveSpeed});
-                int ticks = animationMetronome.ticks(timer.delta());
-                heroSprite.frame =
-                    (heroSprite.frame + ticks) % heroSprite.frameNumber;
-                const auto& currentFrame = frames.at(heroSprite.frame);
-
-                sdlCheck(SDL_SetRenderDrawColor(renderer, 50, 50, 50, 255));
-                sdlCheck(SDL_RenderClear(renderer));
-
-                for (const auto& tree : {tree1, tree2}) {
-                    const auto& treePosition = ecs.component<WorldLocation>(tree).position;
-                    float scale = 10.f;
-                    auto position = SDL_FRect {
-                        .x = treePosition.x - 4 * scale,
-                        .y = -treePosition.y + 8 * scale,
-                        .w = 8 * scale,
-                        .h = 16 * scale};
-                    sdlCheck(SDL_RenderCopyF(
-                        renderer,
-                        treeTexture,
-                        nullptr,
-                        &position));
-                }
-
-                sdlCheck(SDL_RenderCopyF(
-                    renderer,
-                    heroTexture,
-                    &currentFrame,
-                    &heroSprite.position));
-
-                SDL_RenderPresent(renderer);
-            }
+            view.update(ecs, framesPassed * delta);
+            view.present();
         }
     }
-
-    SDL_DestroyTexture(treeTexture);
-    SDL_DestroyTexture(heroTexture);
-
-    SDL_DestroyRenderer(renderer);
-    SDL_DestroyWindow(window);
-
-    IMG_Quit();
-    SDL_QuitSubSystem(sdlFlags);
 }

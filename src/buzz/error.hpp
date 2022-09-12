@@ -44,7 +44,7 @@ private:
     template <Streamable T>
     void updateMessage(T&& value)
     {
-        auto stream = std::ostringstream{std::move(_message)};
+        auto stream = std::ostringstream{std::move(_message), std::ios::app};
         stream << std::forward<T>(value);
         _message = std::move(stream).str();
     }
