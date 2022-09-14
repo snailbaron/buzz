@@ -4,6 +4,7 @@ add_executable(buzz
     main.cpp
     scene.cpp
     sdl.cpp
+    world.cpp
 )
 target_link_libraries(buzz PRIVATE
     build-info

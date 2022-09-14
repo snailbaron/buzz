@@ -1,13 +1,16 @@
 #pragma once
 
 #include "sdl.hpp"
+#include "types.hpp"
 
+#include "evening.hpp"
 #include "tempo.hpp"
 #include "thing.hpp"
 
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <optional>
 #include <tuple>
 #include <vector>
 
@@ -28,88 +31,102 @@ private:
     friend class View;
 };
 
-enum class AnimatedDirection {
-    Down,
-    Up,
-    Left,
-    Right,
-};
-
-enum class AnimatedMotion {
-    Stand,
-    Walk,
-};
-
-class StaticSprite {
+class Sprite {
 public:
-    StaticSprite() {}
-    StaticSprite(const Texture& texture, int w, int h, int scale);
+    virtual ~Sprite() {}
 
-    void position(float x, float y); 
-    void update(double delta);
+    virtual SDL_Texture* texture() const = 0;
+    virtual int width() const = 0;
+    virtual int height() const = 0;
+    virtual const SDL_Rect* frame() const = 0;
 
-    const SDL_Rect* frame() const;
-    const SDL_FRect* targetRect() const;
-    SDL_Texture* texture() const;
+    virtual void velocity(const XYVector& velocity) {}
+    virtual void update(double delta) {}
+};
+
+class AnimatedSprite : public Sprite {
+public:
+    AnimatedSprite(SDL_Texture* texture, int w, int h, int frames = 1);
+
+    SDL_Texture* texture() const override { return _texture; }
+    int width() const override { return _width; }
+    int height() const override { return _height; }
+    const SDL_Rect* frame() const override { return &_frames.at(_currentFrameIndex); }
+
+    void update(double delta) override;
 
 private:
-    const Texture* _texture = nullptr;
+    SDL_Texture* _texture = nullptr;
     int _width = 0;
     int _height = 0;
-    int _scale = 0;
-    SDL_Rect _rect {};
-    SDL_FRect _targetRect {};
+    std::vector<SDL_Rect> _frames;
+    size_t _currentFrameIndex = 0;
+    tempo::Metronome _metronome {3};
 };
 
-class DirectionalSprite {
+class DirectionalSprite : public Sprite {
 public:
-    DirectionalSprite() {}
-    DirectionalSprite(const Texture& texture, int w, int h, int scale);
+    DirectionalSprite(SDL_Texture* texture, int w, int h, int frames = 1);
 
-    const SDL_Rect* frame() const;
-    const SDL_FRect* targetRect() const;
-    SDL_Texture* texture() const;
+    SDL_Texture* texture() const override { return _texture; }
+    int width() const override { return _width; }
+    int height() const override { return _height; }
+    const SDL_Rect* frame() const override;
 
-    void position(float x, float y);
-    void velocity(float vx, float vy);
-    void update(double delta);
+    void velocity(const XYVector& velocity) override;
+    void update(double delta) override;
 
 private:
-    static constexpr float _minWalkSpeed = 50.f;
+    enum class AnimatedDirection {Down, Up, Left, Right};
+    enum class AnimatedMotion {Stand, Walk};
 
-    const Texture* _texture = nullptr;
+    static constexpr float _minWalkSpeed = 3.f;
+
+    SDL_Texture* _texture = nullptr;
+    int _width = 0;
+    int _height = 0;
+
     std::map<
         std::tuple<AnimatedDirection, AnimatedMotion>,
         std::vector<SDL_Rect>> _frames;
     size_t _frameCount = 0;
-    int _width = 0;
-    int _height = 0;
-    int _scale = 0;
     size_t _currentFrameIndex = 0;
     AnimatedDirection _animatedDirection = AnimatedDirection::Down;
     AnimatedMotion _animatedMotion = AnimatedMotion::Stand;
-    SDL_FRect _targetRect {};
-    tempo::Metronome _metronome;
+    tempo::Metronome _metronome {3};
 };
 
 struct Camera {
-    float x = 0;
-    float y = 0;
+    SDL_FRect rect(const XYVector& position, int spriteWidth, int spriteHeight)
+    {
+        return {
+            .x = (position.x - center.x) * pixelsPerUnit * scale + screenSize.x / 2.f - spriteWidth * scale / 2.f,
+            .y = (center.y - position.y) * pixelsPerUnit * scale + screenSize.y / 2.f - spriteHeight * scale / 2.f,
+            .w = 1.f * spriteWidth * scale,
+            .h = 1.f * spriteHeight * scale,
+        };
+    }
+
+    int pixelsPerUnit = 0;
+    int scale = 0;
+    ScreenVector screenSize;
+    XYVector center;
 };
 
-class View final {
+class View final : public evening::Subscriber {
 public:
-    View();
+    View(evening::Channel& worldEvents);
     ~View();
 
-    // hack before the introduction of events
-    void addHero(thing::Entity e);
-    void addTree(thing::Entity e);
-
-    void update(const thing::EntityManager& ecs, double delta);
+    void update(double delta);
     void present();
 
 private:
+    struct SpriteAndPosition {
+        std::unique_ptr<Sprite> sprite;
+        XYVector position;
+    };
+
     SDL_Window* _window = nullptr;
     SDL_Renderer* _renderer = nullptr;
 
@@ -117,8 +134,9 @@ private:
     Texture _treeTexture;
     Texture _grassTexture;
 
-    std::map<thing::Entity, StaticSprite> _staticSprites;
-    std::map<thing::Entity, DirectionalSprite> _movingSprites;
+    std::map<thing::Entity, SpriteAndPosition> _sprites;
 
     Camera _camera;
+    std::optional<thing::Entity> _focusEntity;
+    XYVector _focusPosition;
 };

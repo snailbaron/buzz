@@ -1,9 +1,19 @@
 #include "scene.hpp"
 
 #include "config.hpp"
+#include "events.hpp"
 #include "world.hpp"
 
 #include "build-info.hpp"
+
+#include <iostream>
+
+namespace {
+
+constexpr int PixelScale = 10;
+constexpr int PixelsInUnit = 8;
+
+} // namespace
 
 Texture::Texture(
         SDL_Renderer* renderer, const std::filesystem::path& pathToImageFile)
@@ -28,60 +38,29 @@ const int Texture::height() const
     return _height;
 }
 
-StaticSprite::StaticSprite(const Texture& texture, int w, int h, int scale)
-    : _texture(&texture)
+AnimatedSprite::AnimatedSprite(SDL_Texture* texture, int w, int h, int frames)
+    : _texture(texture)
     , _width(w)
     , _height(h)
-    , _scale(scale)
-    , _rect(SDL_Rect{.x = 0, .y = 0, .w = w, .h = h})
-    , _targetRect(SDL_FRect{
-        .x = 0, .y = 0, .w = 1.f * _width * _scale, .h = 1.f * _height * _scale})
 {
+    for (int i = 0; i < frames; i++) {
+        _frames.push_back({.x = i * w, .y = 0, .w = w, .h = h});
+    }
 }
 
-void StaticSprite::position(float x, float y)
+void AnimatedSprite::update(double delta)
 {
-    _targetRect.x = x - _width * _scale / 2.f;
-    _targetRect.y = y - _height * _scale / 2.f;
-}
-
-void StaticSprite::update(double delta)
-{
-}
-
-const SDL_Rect* StaticSprite::frame() const
-{
-    return &_rect;
-}
-
-const SDL_FRect* StaticSprite::targetRect() const
-{
-    return &_targetRect;
-}
-
-SDL_Texture* StaticSprite::texture() const
-{
-    return _texture->raw();;
+    _currentFrameIndex =
+        (_currentFrameIndex + _metronome.ticks(delta)) % _frames.size();
 }
 
 DirectionalSprite::DirectionalSprite(
-        const Texture& texture, int w, int h, int scale)
-    : _texture(&texture)
+        SDL_Texture* texture, int w, int h, int frames)
+    : _texture(texture)
+    , _width(w)
+    , _height(h)
+    , _frameCount(frames)
 {
-    check(_texture->height() == h * 8);
-    check(_texture->width() % w == 0);
-
-    _frameCount = _texture->width() / w;
-    _width = w;
-    _height = h;
-    _scale = scale;
-    _targetRect = {
-        .x = 0,
-        .y = 0,
-        .w = 1.f * _width * _scale,
-        .h = 1.f * _height * _scale
-    };
-
     for (auto animatedMotion : {AnimatedMotion::Walk, AnimatedMotion::Stand}) {
         for (auto animatedDirection : {
                 AnimatedDirection::Right,
@@ -105,35 +84,19 @@ const SDL_Rect* DirectionalSprite::frame() const
         .at(_currentFrameIndex);
 }
 
-const SDL_FRect* DirectionalSprite::targetRect() const
+void DirectionalSprite::velocity(const XYVector& velocity)
 {
-    return &_targetRect;
-}
+    auto speed = length(velocity);
 
-SDL_Texture* DirectionalSprite::texture() const
-{
-    return _texture->raw();
-}
-
-void DirectionalSprite::position(float x, float y)
-{
-    _targetRect.x = x - _width * _scale / 2.f;
-    _targetRect.y = y - _height * _scale / 2.f;
-}
-
-void DirectionalSprite::velocity(float vx, float vy)
-{
-    auto heroSpeed = std::sqrt(vx * vx + vy * vy);
-
-    if (heroSpeed > 0) {
-        if (1.5 * std::abs(vx) > std::abs(vy)) {
-            if (vx > 0) {
+    if (speed > 0) {
+        if (1.5 * std::abs(velocity.x) > std::abs(velocity.y)) {
+            if (velocity.x > 0) {
                 _animatedDirection = AnimatedDirection::Right;
             } else {
                 _animatedDirection = AnimatedDirection::Left;
             }
         } else {
-            if (vy > 0) {
+            if (velocity.y > 0) {
                 _animatedDirection = AnimatedDirection::Up;
             } else {
                 _animatedDirection = AnimatedDirection::Down;
@@ -141,7 +104,7 @@ void DirectionalSprite::velocity(float vx, float vy)
         }
     }
 
-    if (heroSpeed < _minWalkSpeed) {
+    if (speed < _minWalkSpeed) {
         _animatedMotion = AnimatedMotion::Stand;
     } else {
         _animatedMotion = AnimatedMotion::Walk;
@@ -150,12 +113,49 @@ void DirectionalSprite::velocity(float vx, float vy)
 
 void DirectionalSprite::update(double delta)
 {
-    int ticks = _metronome.ticks(delta);
-    _currentFrameIndex = (_currentFrameIndex + ticks) % _frameCount;
+    _currentFrameIndex =
+        (_currentFrameIndex + _metronome.ticks(delta)) % _frameCount;
 }
 
-View::View()
+View::View(evening::Channel& worldEvents)
+    : _camera({.pixelsPerUnit = PixelsInUnit, .scale = PixelScale})
 {
+    subscribe<Spawn>(worldEvents, [this] (const auto& spawn) {
+        switch (spawn.objectType) {
+            case ObjectType::Hero:
+                _sprites.emplace(
+                    spawn.entity,
+                    SpriteAndPosition{
+                        .sprite = std::make_unique<DirectionalSprite>(
+                            _heroTexture.raw(), 16, 16, 2),
+                        .position = spawn.location,
+                    });
+                _focusEntity = spawn.entity;
+                _focusPosition = spawn.location;
+                break;
+            case ObjectType::Tree:
+                _sprites.emplace(
+                    spawn.entity,
+                    SpriteAndPosition{
+                        .sprite = std::make_unique<AnimatedSprite>(
+                            _treeTexture.raw(), 8, 16),
+                        .position = spawn.location,
+                    });
+                break;
+        }
+    });
+
+    subscribe<Move>(worldEvents, [this] (const auto& move) {
+        if (auto it = _sprites.find(move.entity); it != _sprites.end()) {
+            it->second.position = move.location;
+            it->second.sprite->velocity(move.velocity);
+        }
+
+        if (move.entity == _focusEntity) {
+            _focusPosition = move.location;
+        }
+    });
+
     sdlCheck(SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS));
     check(IMG_Init(IMG_INIT_PNG) == IMG_INIT_PNG);
 
@@ -166,6 +166,8 @@ View::View()
         config().windowWidth,
         config().windowHeight,
         0));
+
+    _camera.screenSize = {config().windowWidth, config().windowHeight};
 
     _renderer = sdlCheck(SDL_CreateRenderer(
         _window,
@@ -186,31 +188,21 @@ View::~View()
     SDL_Quit();
 }
 
-void View::addHero(thing::Entity e)
+void View::update(double delta)
 {
-    _movingSprites.emplace(e, DirectionalSprite{_heroTexture, 16, 16, 10});
-}
-
-void View::addTree(thing::Entity e)
-{
-    _staticSprites.emplace(e, StaticSprite{_treeTexture, 8, 16, 10});
-}
-
-void View::update(const thing::EntityManager& ecs, double delta)
-{
-    for (auto& [e, sprite] : _staticSprites) {
-        const auto& position = ecs.component<WorldLocation>(e).position;
-        sprite.position(position.x, -position.y);
-        sprite.update(delta);
+    for (auto& [e, spriteAndPosition] : _sprites) {
+        spriteAndPosition.sprite->update(delta);
     }
 
-    for (auto& [e, sprite] : _movingSprites) {
-        const auto& position = ecs.component<WorldLocation>(e).position;
-        const auto& velocity = ecs.component<WorldMovement>(e).velocity;
-
-        sprite.position(position.x, -position.y);
-        sprite.velocity(velocity.x, velocity.y);
-        sprite.update(delta);
+    if (_focusEntity) {
+        auto v = _focusPosition - _camera.center;
+        float distance = length(_camera.center - _focusPosition);
+        float advance = 8.f * distance * delta + 1.f * delta;
+        if (advance < distance) {
+            _camera.center += v * advance / distance;
+        } else {
+            _camera.center = _focusPosition;
+        }
     }
 }
 
@@ -219,20 +211,12 @@ void View::present()
     sdlCheck(SDL_SetRenderDrawColor(_renderer, 50, 50, 50, 255));
     sdlCheck(SDL_RenderClear(_renderer));
 
-    for (const auto& [e, sprite] : _staticSprites) {
+    for (const auto& [e, spriteAndPosition] : _sprites) {
+        const auto& [sprite, position] = spriteAndPosition;
+        SDL_FRect targetRect =
+            _camera.rect(position, sprite->width(), sprite->height());
         sdlCheck(SDL_RenderCopyF(
-            _renderer,
-            sprite.texture(),
-            sprite.frame(),
-            sprite.targetRect()));
-    }
-
-    for (const auto& [e, sprite] : _movingSprites) {
-        sdlCheck(SDL_RenderCopyF(
-            _renderer,
-            sprite.texture(),
-            sprite.frame(),
-            sprite.targetRect()));
+            _renderer, sprite->texture(), sprite->frame(), &targetRect));
     }
 
     SDL_RenderPresent(_renderer);
