@@ -6,6 +6,7 @@
 
 #include "build-info.hpp"
 
+#include <cmath>
 #include <iostream>
 
 namespace {
@@ -117,8 +118,9 @@ void DirectionalSprite::update(double delta)
         (_currentFrameIndex + _metronome.ticks(delta)) % _frameCount;
 }
 
-View::View(evening::Channel& worldEvents)
-    : _camera({.pixelsPerUnit = PixelsInUnit, .scale = PixelScale})
+View::View(evening::Channel& worldEvents, evening::Channel& controlEvents)
+    : _controlEvents(controlEvents)
+    , _camera({.pixelsPerUnit = PixelsInUnit, .scale = PixelScale})
 {
     subscribe<Spawn>(worldEvents, [this] (const auto& spawn) {
         switch (spawn.objectType) {
@@ -165,7 +167,7 @@ View::View(evening::Channel& worldEvents)
         SDL_WINDOWPOS_UNDEFINED,
         config().windowWidth,
         config().windowHeight,
-        0));
+        SDL_WINDOW_RESIZABLE));
 
     _camera.screenSize = {config().windowWidth, config().windowHeight};
 
@@ -186,6 +188,42 @@ View::~View()
 
     IMG_Quit();
     SDL_Quit();
+}
+
+bool View::processEvents()
+{
+    for (auto e = SDL_Event{}; SDL_PollEvent(&e); ) {
+        if (e.type == SDL_QUIT) {
+            return false;
+        } else if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_q &&
+                (e.key.keysym.mod & (KMOD_CTRL | KMOD_ALT | KMOD_SHIFT)) == 0 &&
+                e.key.repeat == 0) {
+            return false;
+        } else if ((e.type == SDL_KEYDOWN || e.type == SDL_KEYUP) &&
+                e.key.repeat == 0) {
+
+            if (e.key.keysym.sym == SDLK_a) {
+                _controller.leftPressed = (e.type == SDL_KEYDOWN);
+                _controlEvents.push(_controller.control());
+            } else if (e.key.keysym.sym == SDLK_d) {
+                _controller.rightPressed = (e.type == SDL_KEYDOWN);
+                _controlEvents.push(_controller.control());
+            } else if (e.key.keysym.sym == SDLK_w) {
+                _controller.upPressed = (e.type == SDL_KEYDOWN);
+                _controlEvents.push(_controller.control());
+            } else if (e.key.keysym.sym == SDLK_s) {
+                _controller.downPressed = (e.type == SDL_KEYDOWN);
+                _controlEvents.push(_controller.control());
+            } else if (e.type == SDL_KEYDOWN &&
+                    e.key.keysym.sym == SDLK_RETURN &&
+                    (e.key.keysym.mod & (SDLK_LALT | SDLK_RALT))) {
+            }
+        } else if (e.type == SDL_WINDOWEVENT &&
+                e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+            _camera.screenSize = {e.window.data1, e.window.data2};
+        }
+    }
+    return true;
 }
 
 void View::update(double delta)
@@ -211,6 +249,8 @@ void View::present()
     sdlCheck(SDL_SetRenderDrawColor(_renderer, 50, 50, 50, 255));
     sdlCheck(SDL_RenderClear(_renderer));
 
+    layTexture(_grassTexture);
+
     for (const auto& [e, spriteAndPosition] : _sprites) {
         const auto& [sprite, position] = spriteAndPosition;
         SDL_FRect targetRect =
@@ -220,4 +260,25 @@ void View::present()
     }
 
     SDL_RenderPresent(_renderer);
+}
+
+void View::layTexture(const Texture& texture)
+{
+    auto r = SDL_FRect{
+        .x = 0.f,
+        .y = 0.f,
+        .w = 1.f * texture.width() * PixelScale,
+        .h = 1.f * texture.height() * PixelScale
+    };
+    const float startx = (-texture.width() - std::fmod(_camera.center.x * PixelsInUnit, texture.width())) * PixelScale;
+    const float starty = (-texture.height() + std::fmod(_camera.center.y * PixelsInUnit, texture.height())) * PixelScale;
+    for (r.x = startx; r.x < _camera.screenSize.x; r.x += r.w) {
+        for (r.y = starty; r.y < _camera.screenSize.y; r.y += r.h) {
+            sdlCheck(SDL_RenderCopyF(
+                _renderer,
+                texture.raw(),
+                nullptr,
+                &r));
+        }
+    }
 }

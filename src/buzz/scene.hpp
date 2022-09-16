@@ -113,11 +113,26 @@ struct Camera {
     XYVector center;
 };
 
+struct KeyboardControllerState {
+    bool leftPressed = false;
+    bool rightPressed = false;
+    bool upPressed = false;
+    bool downPressed = false;
+
+    XYVector control() const
+    {
+        return XYVector{
+            1.f * rightPressed - leftPressed,
+            1.f * upPressed - downPressed};
+    }
+};
+
 class View final : public evening::Subscriber {
 public:
-    View(evening::Channel& worldEvents);
+    View(evening::Channel& worldEvents, evening::Channel& controlEvents);
     ~View();
 
+    bool processEvents();
     void update(double delta);
     void present();
 
@@ -126,6 +141,8 @@ private:
         std::unique_ptr<Sprite> sprite;
         XYVector position;
     };
+
+    void layTexture(const Texture& texture);
 
     SDL_Window* _window = nullptr;
     SDL_Renderer* _renderer = nullptr;
@@ -136,7 +153,9 @@ private:
 
     std::map<thing::Entity, SpriteAndPosition> _sprites;
 
+    evening::Channel& _controlEvents;
     Camera _camera;
+    KeyboardControllerState _controller;
     std::optional<thing::Entity> _focusEntity;
     XYVector _focusPosition;
 };
